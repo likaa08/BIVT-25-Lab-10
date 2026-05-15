@@ -19,11 +19,10 @@ namespace Lab10.Green
             if (File.Exists(FullPath))
             {
                 var obj = Deserialize<Lab9.Green.Green>();
-                if (obj != null)
-                {
-                    obj.ChangeText(input);
-                    Serialize(obj);
-                }
+                
+                obj.ChangeText(input);
+                Serialize(obj);
+                
             }
         }
 
@@ -34,7 +33,6 @@ namespace Lab10.Green
 
         public override void Serialize<T>(T obj)
         {
-            if (obj == null) return;
             var options = new JsonSerializerOptions { WriteIndented = true };
             string json = JsonSerializer.Serialize(obj, obj.GetType(), options);
 
@@ -49,89 +47,86 @@ namespace Lab10.Green
         {
             if (!File.Exists(FullPath)) return null;
             string json = File.ReadAllText(FullPath);
-            try
+            
+            using (JsonDocument doc = JsonDocument.Parse(json))
             {
-                using (JsonDocument doc = JsonDocument.Parse(json))
+                var root = doc.RootElement;
+                string? typeName = null;
+                if (root.ValueKind == JsonValueKind.Object && root.TryGetProperty("TypeName", out var typeEl))
                 {
-                    var root = doc.RootElement;
-                    string typeName = root.TryGetProperty("TypeName", out var typeEl) ? typeEl.GetString() : null;
-                    Type actualType = typeof(T);
-
-                    if (!string.IsNullOrEmpty(typeName))
+                    typeName = typeEl.GetString();
+                }
+                //string typeName = root.TryGetProperty("TypeName", out var typeEl) ? typeEl.GetString() : null;
+                Type actualType = typeof(T);
+    
+                if (!string.IsNullOrEmpty(typeName))
+                {
+                    var foundType = AppDomain.CurrentDomain.GetAssemblies()
+                        .Select(a => a.GetType(typeName))
+                        .FirstOrDefault(t => t != null);
+                    if (foundType != null) actualType = foundType;
+                }
+    
+                var dict = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var prop in root.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String)
+                        dict[prop.Name] = prop.Value.GetString();
+                    else
+                        dict[prop.Name] = prop.Value.GetRawText();
+                }
+    
+                object obj = null;
+                var ctors = actualType.GetConstructors().OrderByDescending(c => c.GetParameters().Length);
+                foreach (var ctor in ctors)
+                {
+                    var pInfos = ctor.GetParameters();
+                    var args = new object[pInfos.Length];
+                    bool ok = true;
+                    for (int i = 0; i < pInfos.Length; i++)
                     {
-                        var foundType = AppDomain.CurrentDomain.GetAssemblies()
-                            .Select(a => a.GetType(typeName))
-                            .FirstOrDefault(t => t != null);
-                        if (foundType != null) actualType = foundType;
-                    }
-
-                    var dict = new System.Collections.Generic.Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                    foreach (var prop in root.EnumerateObject())
-                    {
-                        if (prop.Value.ValueKind == JsonValueKind.String)
-                            dict[prop.Name] = prop.Value.GetString();
-                        else
-                            dict[prop.Name] = prop.Value.GetRawText();
-                    }
-
-                    object obj = null;
-                    var ctors = actualType.GetConstructors().OrderByDescending(c => c.GetParameters().Length);
-                    foreach (var ctor in ctors)
-                    {
-                        var pInfos = ctor.GetParameters();
-                        var args = new object[pInfos.Length];
-                        bool ok = true;
-                        for (int i = 0; i < pInfos.Length; i++)
-                        {
-                            string pName = pInfos[i].Name.ToLower();
-                            string key = dict.Keys.FirstOrDefault(k => k.ToLower() == pName || k.ToLower().Contains(pName) || pName.Contains(k.ToLower()));
-                            if (key == null && (pName == "text" || pName == "str"))
-                                key = dict.Keys.FirstOrDefault(k => k.ToLower().Contains("input"));
-
-                            if (key != null)
-                            {
-                                try
-                                {
-                                    if (pInfos[i].ParameterType == typeof(string))
-                                        args[i] = dict[key];
-                                    else
-                                        args[i] = JsonSerializer.Deserialize(dict[key], pInfos[i].ParameterType);
-                                }
-                                catch { ok = false; }
-                            }
-                            else
-                            {
-                                args[i] = null;
-                            }
-                        }
-                        if (ok)
+                        string pName = pInfos[i].Name.ToLower();
+                        string key = dict.Keys.FirstOrDefault(k => k.ToLower() == pName || k.ToLower().Contains(pName) || pName.Contains(k.ToLower()));
+                        if (key == null && (pName == "text" || pName == "str"))
+                            key = dict.Keys.FirstOrDefault(k => k.ToLower().Contains("input"));
+    
+                        if (key != null)
                         {
                             try
                             {
-                                obj = ctor.Invoke(args);
-                                break;
+                                if (pInfos[i].ParameterType == typeof(string))
+                                    args[i] = dict[key];
+                                else
+                                    args[i] = JsonSerializer.Deserialize(dict[key], pInfos[i].ParameterType);
                             }
-                            catch { }
+                            catch { ok = false; }
+                        }
+                        else
+                        {
+                            args[i] = null;
                         }
                     }
-
-                    if (obj == null)
+                    if (ok)
                     {
-                        try { obj = Activator.CreateInstance(actualType); }
-                        catch { obj = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(actualType); }
+                        obj = ctor.Invoke(args);
+                        break;
                     }
-
-                    var reviewMethod = obj?.GetType().GetMethod("Review");
-                    if (reviewMethod != null)
-                    {
-                        try { reviewMethod.Invoke(obj, null); } catch { }
-                    }
-
-                    return (T)obj;
                 }
+    
+                if (obj == null)
+                {
+                    try { obj = Activator.CreateInstance(actualType); }
+                    catch { obj = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(actualType); }
+                }
+    
+                var reviewMethod = obj?.GetType().GetMethod("Review");
+                if (reviewMethod != null)
+                {
+                    reviewMethod.Invoke(obj, null);
+                }
+    
+                return (T)obj;
             }
-            catch { }
-            return null;
         }
     }
 }
