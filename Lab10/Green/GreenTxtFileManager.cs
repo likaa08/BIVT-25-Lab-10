@@ -20,11 +20,10 @@ namespace Lab10.Green
             if (File.Exists(FullPath))
             {
                 var obj = Deserialize<Lab9.Green.Green>();
-                if (obj != null)
-                {
-                    obj.ChangeText(input);
-                    Serialize(obj);
-                }
+                
+                obj.ChangeText(input);
+                Serialize(obj);
+                
             }
         }
 
@@ -35,7 +34,6 @@ namespace Lab10.Green
 
         public override void Serialize<T>(T obj)
         {
-            if (obj == null) return;
             string content = $"TypeName:{obj.GetType().FullName}\n";
 
             var props = obj.GetType().GetProperties(BindingFlags.Public | BindingFlags.Instance);
@@ -63,6 +61,68 @@ namespace Lab10.Green
             if (!string.IsNullOrEmpty(typeName))
             {
                 var found = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(typeName)).FirstOrDefault(x => x != null);
+                if (found != null) actualType = found;
+            }
+
+            var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (string line in lines)
+            {
+                int colonIndex = line.IndexOf(':');
+                if (colonIndex > 0)
+                {
+                    string key = line.Substring(0, colonIndex).Trim();
+                    string value = line.Substring(colonIndex + 1).Trim().Replace("\\n", "\n").Replace("\\r", "\r");
+                    dict[key] = value;
+                }
+            }
+
+            object obj = null;
+            var ctors = actualType.GetConstructors().OrderByDescending(c => c.GetParameters().Length);
+            foreach (var ctor in ctors)
+            {
+                var pInfos = ctor.GetParameters();
+                var args = new object[pInfos.Length];
+                bool ok = true;
+                for (int i = 0; i < pInfos.Length; i++)
+                {
+                    string pName = pInfos[i].Name.ToLower();
+                    string key = dict.Keys.FirstOrDefault(k => k.ToLower() == pName || k.ToLower().Contains(pName) || pName.Contains(k.ToLower()));
+                    if (key == null && (pName == "text" || pName == "str"))
+                        key = dict.Keys.FirstOrDefault(k => k.ToLower().Contains("input"));
+
+                    if (key != null)
+                    {
+                        try { args[i] = Convert.ChangeType(dict[key], pInfos[i].ParameterType); }
+                        catch { ok = false; }
+                    }
+                    else
+                    {
+                        args[i] = null;
+                    }
+                }
+                if (ok)
+                {
+                    obj = ctor.Invoke(args);
+                    break;
+                }
+            }
+
+            if (obj == null)
+            {
+                try { obj = Activator.CreateInstance(actualType); }
+                catch { obj = System.Runtime.Serialization.FormatterServices.GetUninitializedObject(actualType); }
+            }
+
+            var reviewMethod = obj?.GetType().GetMethod("Review");
+            if (reviewMethod != null)
+            {
+                reviewMethod.Invoke(obj, null);
+            }
+
+            return (T)obj;
+        }
+    }
+}                var found = AppDomain.CurrentDomain.GetAssemblies().Select(a => a.GetType(typeName)).FirstOrDefault(x => x != null);
                 if (found != null) actualType = found;
             }
 
